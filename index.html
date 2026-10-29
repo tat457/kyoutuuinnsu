@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>共通因数マスター - 工夫して解く掛け算</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Canvas Confetti -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&family=JetBrains+Mono:wght@600;800&display=swap');
+    
+    body {
+      font-family: 'M PLUS Rounded 1c', sans-serif;
+      background-color: #f8fafc;
+      touch-action: manipulation;
+    }
+    .font-math {
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    
+    /* 正解・不正解のアニメーション */
+    @keyframes pulse-success {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+    .animate-success {
+      animation: pulse-success 0.4s ease-in-out;
+    }
+    
+    @keyframes shake-error {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-8px); }
+      40%, 80% { transform: translateX(8px); }
+    }
+    .animate-shake {
+      animation: shake-error 0.4s ease-in-out;
+    }
+
+    /* カスタムスクロールバー */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+  </style>
+</head>
+<body class="text-slate-800 bg-gradient-to-br from-indigo-50 via-slate-50 to-emerald-50 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- 効果音ユーティリティ (Web Audio API) ---
+    class SoundManager {
+      constructor() {
+        this.ctx = null;
+        this.enabled = true;
+      }
+
+      initCtx() {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) {
+            this.ctx = new AudioContext();
+          }
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+
+      playTone(freq, type, duration, delay = 0) {
+        if (!this.enabled) return;
+        this.initCtx();
+        if (!this.ctx) return;
+
+        setTimeout(() => {
+          try {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+            gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+
+            osc.start();
+            osc.stop(this.ctx.currentTime + duration);
+          } catch (e) {
+            console.error(e);
+          }
+        }, delay);
+      }
+
+      playCorrect() {
+        this.playTone(523.25, 'sine', 0.12, 0);   // C5
+        this.playTone(659.25, 'sine', 0.12, 80);  // E5
+        this.playTone(783.99, 'triangle', 0.25, 160); // G5
+      }
+
+      playIncorrect() {
+        this.playTone(220, 'sawtooth', 0.15, 0);  // A3
+        this.playTone(180, 'sawtooth', 0.25, 120); // Low note
+      }
+
+      playClick() {
+        this.playTone(800, 'sine', 0.05, 0);
+      }
+
+      playFanfare() {
+        const notes = [523.25, 659.25, 783.99, 1046.50];
+        notes.forEach((freq, idx) => {
+          this.playTone(freq, 'triangle', 0.2, idx * 100);
+        });
+      }
+    }
+
+    const soundManager = new SoundManager();
+
+    // --- 全角数字を半角に変換するユーティリティ ---
+    const toHalfWidth = (str) => {
+      return str.replace(/[Ａ-Ｚａ-ｚ０-９．＋－＊／]/g, (s) => {
+        return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+      }).replace(/／/g, '/').replace(/×/g, '*').replace(/÷/g, '/');
+    };
+
+    // --- 問題自動生成エンジン ---
+    function generateProblem(level) {
+      if (level === 'easy') {
+        // 初級: 2項の足し算, K*(A+B), A+B が 10, 100, 1000
+        const targets = [10, 100, 100, 1000];
+        const target = targets[Math.floor(Math.random() * targets.length)];
+        let K, A, B;
+
+        if (target === 10) {
+          K = Math.floor(Math.random() * 8) + 2; // 2..9
+          A = Math.floor(Math.random() * 8) + 1; // 1..9
+          B = 10 - A;
+        } else if (target === 100) {
+          K = Math.floor(Math.random() * 89) + 11; // 11..99
+          A = Math.floor(Math.random() * 78) + 11; // 11..88
+          while (A % 10 === 0) A = Math.floor(Math.random() * 78) + 11;
+          B = 100 - A;
+        } else { // 1000
+          K = Math.floor(Math.random() * 89) + 11;
+          A = Math.floor(Math.random() * 700) + 101;
+          while (A % 100 === 0) A = Math.floor(Math.random() * 700) + 101;
+          B = 1000 - A;
+        }
+
+        const isKFirst = Math.random() > 0.3;
+        const exprStr = isKFirst 
+          ? `${K} × ${A} + ${K} × ${B}` 
+          : `${A} × ${K} + ${B} × ${K}`;
+
+        return {
+          id: Date.now() + Math.random(),
+          level: 'easy',
+          levelLabel: '初級 (2項の足し算)',
+          exprStr,
+          commonFactor: K,
+          bracketExpr: `${A} + ${B}`,
+          bracketVal: target,
+          finalAns: K * target,
+          terms: [
+            { k: K, v: A, op: '' },
+            { k: K, v: B, op: '+' }
+          ],
+          hint: `両方の項にある共通の数「${K}」を見つけましょう！ ${K} × (${A} + ${B}) とまとめられます。`,
+          explanation: [
+            `式全体を見て、共通して掛けられている数「${K}」を探します。`,
+            `共通の数 ${K} をかっこ（ ）の前に出します： ${K} × (${A} + ${B})`,
+            `かっこ内の足し算を先に計算します： ${A} + ${B} = ${target}`,
+            `最後に掛け算をします： ${K} × ${target} = ${K * target}`
+          ]
+        };
+
+      } else if (level === 'medium') {
+        // 中級: 引き算混じり または 3項
+        const isSub = Math.random() > 0.5;
+
+        if (isSub) {
+          // 引き算 2項
+          const target = Math.random() > 0.4 ? 100 : 10;
+          const K = Math.floor(Math.random() * 75) + 15;
+          const B = Math.floor(Math.random() * 120) + 15;
+          const A = B + target;
+
+          return {
+            id: Date.now() + Math.random(),
+            level: 'medium',
+            levelLabel: '中級 (引き算)',
+            exprStr: `${K} × ${A} - ${K} × ${B}`,
+            commonFactor: K,
+            bracketExpr: `${A} - ${B}`,
+            bracketVal: target,
+            finalAns: K * target,
+            terms: [
+              { k: K, v: A, op: '' },
+              { k: K, v: B, op: '-' }
+            ],
+            hint: `共通の数「${K}」で括ります。引き算なので ${K} × (${A} - ${B}) になります。`,
+            explanation: [
+              `共通して掛けられている「${K}」を見つけます。`,
+              `引き算の記号をそのままカッコの中に残してまとめます： ${K} × (${A} - ${B})`,
+              `カッコ内を計算します： ${A} - ${B} = ${target}`,
+              `掛け算をします： ${K} × ${target} = ${K * target}`
+            ]
+          };
+        } else {
+          // 3項の計算
+          const target = 100;
+          const K = Math.floor(Math.random() * 35) + 5;
+          let A = Math.floor(Math.random() * 35) + 10;
+          let B = Math.floor(Math.random() * 35) + 10;
+          let C = 100 - (A + B);
+          if (C <= 5) { A = 25; B = 35; C = 40; }
+
+          const hasMinus = Math.random() > 0.5;
+          if (hasMinus) {
+            // A + B - C = 100 => A+B = 100 + C
+            C = Math.floor(Math.random() * 30) + 10;
+            const sumAB = 100 + C;
+            A = Math.floor(sumAB / 2) + Math.floor(Math.random() * 8) - 4;
+            B = sumAB - A;
+
+            return {
+              id: Date.now() + Math.random(),
+              level: 'medium',
+              levelLabel: '中級 (3項・引き算あり)',
+              exprStr: `${K} × ${A} + ${K} × ${B} - ${K} × ${C}`,
+              commonFactor: K,
+              bracketExpr: `${A} + ${B} - ${C}`,
+              bracketVal: 100,
+              finalAns: K * 100,
+              terms: [
+                { k: K, v: A, op: '' },
+                { k: K, v: B, op: '+' },
+                { k: K, v: C, op: '-' }
+              ],
+              hint: `3つの項すべてに「${K}」が含まれています！ ${K} × (${A} + ${B} - ${C}) とまとめましょう。`,
+              explanation: [
+                `3つの項すべてにある共通の数「${K}」を確認します。`,
+                `かっこ内にまとめます： ${K} × (${A} + ${B} - ${C})`,
+                `かっこの中を計算します： ${A} + ${B} - ${C} = 100`,
+                `掛け算をします： ${K} × 100 = ${K * 100}`
+              ]
+            };
+          } else {
+            return {
+              id: Date.now() + Math.random(),
+              level: 'medium',
+              levelLabel: '中級 (3项の足し算)',
+              exprStr: `${K} × ${A} + ${K} × ${B} + ${K} × ${C}`,
+              commonFactor: K,
+              bracketExpr: `${A} + ${B} + ${C}`,
+              bracketVal: 100,
+              finalAns: K * 100,
+              terms: [
+                { k: K, v: A, op: '' },
+                { k: K, v: B, op: '+' },
+                { k: K, v: C, op: '+' }
+              ],
+              hint: `3つの項すべてに「${K}」が共通しています。 ${K} × (${A} + ${B} + ${C})`,
+              explanation: [
+                `3つの項すべてにある共通の数「${K}」を見つけます。`,
+                `カッコでまとめます： ${K} × (${A} + ${B} + ${C})`,
+                `カッコの中を先に足します： ${A} + ${B} + ${C} = 100`,
+                `計算します： ${K} × 100 = ${K * 100}`
+              ]
+            };
+          }
+        }
+
+      } else {
+        // 上級: 小数・円周率 3.14・特殊な工夫
+        const subType = Math.floor(Math.random() * 3);
+
+        if (subType === 0) {
+          // 円周率 3.14
+          const K = 3.14;
+          const target = Math.random() > 0.5 ? 100 : 10;
+
+          if (target === 100) {
+            const A = Math.floor(Math.random() * 75) + 12;
+            const B = 100 - A;
+            const finalAns = 314;
+
+            return {
+              id: Date.now() + Math.random(),
+              level: 'hard',
+              levelLabel: '上級 (円周率 3.14)',
+              exprStr: `3.14 × ${A} + 3.14 × ${B}`,
+              commonFactor: 3.14,
+              bracketExpr: `${A} + ${B}`,
+              bracketVal: 100,
+              finalAns: finalAns,
+              terms: [
+                { k: 3.14, v: A, op: '' },
+                { k: 3.14, v: B, op: '+' }
+              ],
+              hint: `円周率「3.14」でまとめると、大きな小数計算の筆算が不要になります！ 3.14 × (${A} + ${B})`,
+              explanation: [
+                `共通する小数「3.14」を見つけます。`,
+                `カッコで括ります： 3.14 × (${A} + ${B})`,
+                `カッコ内を足すとちょうど100になります： ${A} + ${B} = 100`,
+                `3.14 × 100 = 314 (小数点を右に2つ移動するだけ！)`
+              ]
+            };
+          } else {
+            // target = 10 (例: 3.14 * 6.4 + 3.14 * 3.6)
+            const aInt = Math.floor(Math.random() * 75) + 12;
+            const A = Math.round((aInt / 10) * 10) / 10;
+            const B = Math.round((10 - A) * 10) / 10;
+            const finalAns = 31.4;
+
+            return {
+              id: Date.now() + Math.random(),
+              level: 'hard',
+              levelLabel: '上級 (小数の工夫)',
+              exprStr: `3.14 × ${A} + 3.14 × ${B}`,
+              commonFactor: 3.14,
+              bracketExpr: `${A} + ${B}`,
+              bracketVal: 10,
+              finalAns: finalAns,
+              terms: [
+                { k: 3.14, v: A, op: '' },
+                { k: 3.14, v: B, op: '+' }
+              ],
+              hint: `共通の「3.14」でまとめましょう： 3.14 × (${A} + ${B})`,
+              explanation: [
+                `共通する小数「3.14」を見つけます。`,
+                `まとめます： 3.14 × (${A} + ${B})`,
+                `カッコの中を計算します： ${A} + ${B} = 10`,
+                `3.14 × 10 = 31.4`
+              ]
+            };
+          }
+
+        } else if (subType === 1) {
+          // 小数の共通因数 (0.25, 1.25, 2.5)
+          const presets = [
+            { k: 0.25, target: 100, ans: 25 },
+            { k: 0.25, target: 40, ans: 10 },
+            { k: 1.25, target: 80, ans: 100 },
+            { k: 2.5, target: 40, ans: 100 },
+            { k: 2.5, target: 100, ans: 250 }
+          ];
+          const item = presets[Math.floor(Math.random() * presets.length)];
+          const K = item.k;
+          const target = item.target;
+          const A = Math.floor(target * 0.3) + Math.floor(Math.random() * (target * 0.4));
+          const B = target - A;
+
+          return {
+            id: Date.now() + Math.random(),
+            level: 'hard',
+            levelLabel: `上級 (小数 ${K})`,
+            exprStr: `${K} × ${A} + ${K} × ${B}`,
+            commonFactor: K,
+            bracketExpr: `${A} + ${B}`,
+            bracketVal: target,
+            finalAns: item.ans,
+            terms: [
+              { k: K, v: A, op: '' },
+              { k: K, v: B, op: '+' }
+            ],
+            hint: `共通の小数「${K}」で括りましょう： ${K} × (${A} + ${B})`,
+            explanation: [
+              `共通する小数「${K}」を見つけます。`,
+              `かっこにまとめます： ${K} × (${A} + ${B})`,
+              `かっこの中を足すと区切りの良い数になります： ${A} + ${B} = ${target}`,
+              `掛け算を実行します： ${K} × ${target} = ${item.ans}`
+            ]
+          };
+
+        } else {
+          // 3.14 引き算
+          const K = 3.14;
+          const B = Math.floor(Math.random() * 80) + 15;
+          const A = B + 100;
+
+          return {
+            id: Date.now() + Math.random(),
+            level: 'hard',
+            levelLabel: '上級 (円周率の引き算)',
+            exprStr: `3.14 × ${A} - 3.14 × ${B}`,
+            commonFactor: 3.14,
+            bracketExpr: `${A} - ${B}`,
+            bracketVal: 100,
+            finalAns: 314,
+            terms: [
+              { k: 3.14, v: A, op: '' },
+              { k: 3.14, v: B, op: '-' }
+            ],
+            hint: `「3.14」で括るとカッコの中は ${A} - ${B} になります。`,
+            explanation: [
+              `共通の「3.14」を見つけます。`,
+              `引き算としてまとめます： 3.14 × (${A} - ${B})`,
+              `カッコ内を計算します： ${A} - ${B} = 100`,
+              `3.14 × 100 = 314`
+            ]
+          };
+        }
+      }
+    }
+
+    // --- メインコンポーネント ---
+    function App() {
+      // 状態管理
+      const [level, setLevel] = useState('easy'); // easy, medium, hard
+      const [mode, setMode] = useState('practice'); // practice, timeattack
+      const [currentProblem, setCurrentProblem] = useState(null);
+
+      // ユーザー入力
+      const [inputK, setInputK] = useState('');
+      const [inputBracket, setInputBracket] = useState('');
+      const [inputAns, setInputAns] = useState('');
+
+      // フォーカス対象
+      const [activeField, setActiveField] = useState('k'); // 'k', 'bracket', 'ans'
+
+      // ゲーム状態
+      const [streak, setStreak] = useState(0);
+      const [maxStreak, setMaxStreak] = useState(0);
+      const [score, setScore] = useState(0);
+      const [taHighScore, setTaHighScore] = useState(0);
+      const [timeLeft, setTimeLeft] = useState(60);
+      const [isGameActive, setIsGameActive] = useState(false);
+      const [isGameOver, setIsGameOver] = useState(false);
+
+      // 判定と表示補助
+      const [feedback, setFeedback] = useState(null); // 'correct', 'incorrect'
+      const [showHint, setShowHint] = useState(false);
+      const [showExplanation, setShowExplanation] = useState(false);
+      const [highlightCommon, setHighlightCommon] = useState(false);
+      const [soundEnabled, setSoundEnabled] = useState(true);
+      const [showNumpad, setShowNumpad] = useState(false);
+
+      // Refs
+      const inputKRef = useRef(null);
+      const inputBracketRef = useRef(null);
+      const inputAnsRef = useRef(null);
+      const timerRef = useRef(null);
+
+      // 初回ロード
+      useEffect(() => {
+        loadProblem('easy');
+        const savedTaScore = localStorage.getItem('common_factor_ta_score');
+        if (savedTaScore) setTaHighScore(parseInt(savedTaScore, 10));
+      }, []);
+
+      // アイコン初期化
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      });
+
+      // 問題読み込み
+      const loadProblem = (lvl = level) => {
+        const p = generateProblem(lvl);
+        setCurrentProblem(p);
+        setInputK('');
+        setInputBracket('');
+        setInputAns('');
+        setFeedback(null);
+        setShowHint(false);
+        setShowExplanation(false);
+        setTimeout(() => {
+          if (inputKRef.current) inputKRef.current.focus();
+        }, 50);
+      };
+
+      // 音声切り替え
+      const toggleSound = () => {
+        soundManager.enabled = !soundEnabled;
+        setSoundEnabled(!soundEnabled);
+      };
+
+      // 難易度変更
+      const handleLevelChange = (newLvl) => {
+        soundManager.playClick();
+        setLevel(newLvl);
+        if (mode === 'timeattack' && isGameActive) {
+          endGame();
+        }
+        loadProblem(newLvl);
+      };
+
+      // モード変更
+      const handleModeChange = (newMode) => {
+        soundManager.playClick();
+        setMode(newMode);
+        setIsGameActive(false);
+        setIsGameOver(false);
+        if (timerRef.current) clearInterval(timerRef.current);
+        loadProblem(level);
+      };
+
+      // タイムアタック開始
+      const startTimeAttack = () => {
+        soundManager.playClick();
+        soundManager.initCtx();
+        setMode('timeattack');
+        setScore(0);
+        setTimeLeft(60);
+        setIsGameActive(true);
+        setIsGameOver(false);
+        loadProblem(level);
+
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => {
+          setTimeLeft((prev) => {
+            if (prev <= 1) {
+              clearInterval(timerRef.current);
+              endGame();
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      };
+
+      // タイムアタック終了
+      const endGame = () => {
+        setIsGameActive(false);
+        setIsGameOver(true);
+        soundManager.playFanfare();
+
+        setScore((finalScore) => {
+          if (finalScore > taHighScore) {
+            setTaHighScore(finalScore);
+            localStorage.setItem('common_factor_ta_score', finalScore.toString());
+          }
+          return finalScore;
+        });
+
+        if (window.confetti) {
+          window.confetti({
+            particleCount: 100,
+            spread: 70,
+            origin: { y: 0.6 }
+          });
+        }
+      };
+
+      // 採点チェック
+      const checkAnswer = (e) => {
+        if (e) e.preventDefault();
+        if (!currentProblem || feedback === 'correct') return;
+
+        soundManager.initCtx();
+
+        // 入力の正規化
+        const cleanK = parseFloat(toHalfWidth(inputK));
+        const cleanBracketStr = toHalfWidth(inputBracket).trim();
+        const cleanAns = parseFloat(toHalfWidth(inputAns));
+
+        // 共通因数判定
+        const isKCorrect = !isNaN(cleanK) && Math.abs(cleanK - currentProblem.commonFactor) < 0.0001;
+
+        // かっこ内判定（数値 または 算術式の計算結果）
+        let isBracketCorrect = false;
+        if (!isNaN(parseFloat(cleanBracketStr))) {
+          if (Math.abs(parseFloat(cleanBracketStr) - currentProblem.bracketVal) < 0.0001) {
+            isBracketCorrect = true;
+          }
+        }
+        // 式で入力された場合（例: 64+36）
+        if (!isBracketCorrect && cleanBracketStr.length > 0) {
+          try {
+            // 安全な簡易数式評価
+            const sanitizedExpr = cleanBracketStr.replace(/[^0-9.+-]/g, '');
+            if (sanitizedExpr) {
+              const evalRes = Function(`'use strict'; return (${sanitizedExpr})`)();
+              if (Math.abs(evalRes - currentProblem.bracketVal) < 0.0001) {
+                isBracketCorrect = true;
+              }
+            }
+          } catch (err) {}
+        }
+
+        // 最終答え判定
+        const isAnsCorrect = !isNaN(cleanAns) && Math.abs(cleanAns - currentProblem.finalAns) < 0.0001;
+
+        if (isKCorrect && isBracketCorrect && isAnsCorrect) {
+          // 正解！
+          soundManager.playCorrect();
+          setFeedback('correct');
+
+          const newStreak = streak + 1;
+          setStreak(newStreak);
+          if (newStreak > maxStreak) setMaxStreak(newStreak);
+
+          if (mode === 'timeattack') {
+            const addedScore = level === 'easy' ? 100 : level === 'medium' ? 150 : 200;
+            setScore((prev) => prev + addedScore + newStreak * 10);
+          }
+
+          if (window.confetti) {
+            window.confetti({
+              particleCount: 50,
+              spread: 60,
+              origin: { y: 0.7 }
+            });
+          }
+
+          // 自動で次の問題（1.2秒後）
+          setTimeout(() => {
+            loadProblem(level);
+          }, 1200);
+
+        } else {
+          // 不正解
+          soundManager.playIncorrect();
+          setFeedback('incorrect');
+          setStreak(0);
+
+          setTimeout(() => {
+            setFeedback(null);
+          }, 800);
+        }
+      };
+
+      // テンキー入力補助
+      const handleNumpadInput = (char) => {
+        soundManager.playClick();
+        let targetSetter, targetVal;
+        if (activeField === 'k') {
+          targetSetter = setInputK;
+          targetVal = inputK;
+        } else if (activeField === 'bracket') {
+          targetSetter = setInputBracket;
+          targetVal = inputBracket;
+        } else {
+          targetSetter = setInputAns;
+          targetVal = inputAns;
+        }
+
+        if (char === 'backspace') {
+          targetSetter(targetVal.slice(0, -1));
+        } else if (char === 'clear') {
+          targetSetter('');
+        } else if (char === 'next') {
+          if (activeField === 'k') {
+            setActiveField('bracket');
+            if (inputBracketRef.current) inputBracketRef.current.focus();
+          } else if (activeField === 'bracket') {
+            setActiveField('ans');
+            if (inputAnsRef.current) inputAnsRef.current.focus();
+          } else {
+            checkAnswer();
+          }
+        } else {
+          targetSetter(targetVal + char);
+        }
+      };
+
+      // 問題の視覚的強調用レンダリング
+      const renderFormattedExpr = () => {
+        if (!currentProblem) return null;
+        const { terms } = currentProblem;
+
+        if (!terms) {
+          return <span class="font-math">{currentProblem.exprStr}</span>;
+        }
+
+        return (
+          <div className="flex flex-wrap items-center justify-center gap-2 font-math text-2xl md:text-4xl font-extrabold tracking-tight">
+            {terms.map((term, idx) => {
+              const isKMatch = highlightCommon;
+              return (
+                <div key={idx} className="flex items-center gap-1.5">
+                  {term.op && <span className="text-slate-400 font-normal mx-1">{term.op}</span>}
+                  
+                  {/* K と V の順序表現 */}
+                  <span className={`px-2 py-1 rounded-xl transition-all duration-300 ${
+                    isKMatch 
+                      ? 'bg-amber-100 text-amber-900 border-2 border-amber-400 shadow-sm scale-105' 
+                      : 'bg-slate-100 text-slate-800'
+                  }`}>
+                    {term.k}
+                  </span>
+                  
+                  <span className="text-indigo-400 text-xl md:text-2xl">×</span>
+                  
+                  <span className="px-2 py-1 rounded-xl bg-white text-slate-700 border border-slate-200">
+                    {term.v}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto px-4 py-6 md:py-10">
+          
+          {/* ヘッダー */}
+          <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="p-2 bg-indigo-600 text-white rounded-2xl shadow-md">
+                  <i data-lucide="calculator" className="w-6 h-6"></i>
+                </span>
+                <h1 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">
+                  共通因数マスター
+                </h1>
+              </div>
+              <p className="text-xs md:text-sm text-slate-500 mt-1 font-medium">
+                同じ数をまとめて、計算をすばやくカンタンに！
+              </p>
+            </div>
+
+            {/* コントロール・設定 */}
+            <div className="flex items-center gap-2 self-end md:self-auto">
+              <button
+                onClick={() => setHighlightCommon(!highlightCommon)}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl border transition-all ${
+                  highlightCommon
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+                title="共通の数字を色付けして目立たせます"
+              >
+                <i data-lucide="sparkles" className="w-4 h-4"></i>
+                <span>ヒント強調 {highlightCommon ? 'ON' : 'OFF'}</span>
+              </button>
+
+              <button
+                onClick={toggleSound}
+                className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                title="効果音の切り替え"
+              >
+                <i data-lucide={soundEnabled ? "volume-2" : "volume-x"} className="w-4 h-4"></i>
+              </button>
+
+              <button
+                onClick={() => setShowNumpad(!showNumpad)}
+                className={`p-2.5 rounded-xl border transition-colors md:hidden ${
+                  showNumpad ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+                }`}
+                title="画面テンキー表示"
+              >
+                <i data-lucide="grid" className="w-4 h-4"></i>
+              </button>
+            </div>
+          </header>
+
+          {/* モード切り替え & ステータス */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+            
+            {/* 難易度切り替えタブ */}
+            <div className="md:col-span-2 bg-white p-1.5 rounded-2xl border border-slate-200/80 shadow-sm flex">
+              <button
+                onClick={() => handleLevelChange('easy')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs md:text-sm font-bold transition-all ${
+                  level === 'easy'
+                    ? 'bg-emerald-500 text-white shadow-md'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                🌱 初級 <span className="text-[10px] opacity-80 block md:inline">(2項の足し算)</span>
+              </button>
+
+              <button
+                onClick={() => handleLevelChange('medium')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs md:text-sm font-bold transition-all ${
+                  level === 'medium'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                🌿 中級 <span className="text-[10px] opacity-80 block md:inline">(引き算・3項)</span>
+              </button>
+
+              <button
+                onClick={() => handleLevelChange('hard')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs md:text-sm font-bold transition-all ${
+                  level === 'hard'
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                🔥 上級 <span className="text-[10px] opacity-80 block md:inline">(小数・3.14)</span>
+              </button>
+            </div>
+
+            {/* モード選択 */}
+            <div className="bg-white p-1.5 rounded-2xl border border-slate-200/80 shadow-sm flex">
+              <button
+                onClick={() => handleModeChange('practice')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs md:text-sm font-bold transition-all ${
+                  mode === 'practice'
+                    ? 'bg-slate-800 text-white shadow-md'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                📖 練習
+              </button>
+
+              <button
+                onClick={() => handleModeChange('timeattack')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs md:text-sm font-bold transition-all ${
+                  mode === 'timeattack'
+                    ? 'bg-rose-500 text-white shadow-md'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                ⏱️ タイムアタック
+              </button>
+            </div>
+
+          </div>
+
+          {/* タイムアタック ヘッダー（タイムアタック時のみ表示） */}
+          {mode === 'timeattack' && (
+            <div className="bg-gradient-to-r from-rose-500 to-pink-600 rounded-2xl p-4 text-white shadow-lg mb-6 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                  <i data-lucide="timer" className="w-7 h-7"></i>
+                </div>
+                <div>
+                  <div className="text-xs text-rose-100 font-bold uppercase tracking-wider">残り時間</div>
+                  <div className="text-3xl font-extrabold font-math">{timeLeft} <span className="text-sm">秒</span></div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-6">
+                <div>
+                  <div className="text-xs text-rose-100 font-bold uppercase tracking-wider">スコア</div>
+                  <div className="text-2xl font-black">{score} <span className="text-xs font-normal">pt</span></div>
+                </div>
+                <div>
+                  <div className="text-xs text-rose-100 font-bold uppercase tracking-wider">ハイスコア</div>
+                  <div className="text-2xl font-black text-yellow-300">{taHighScore} <span className="text-xs font-normal">pt</span></div>
+                </div>
+
+                {!isGameActive && !isGameOver && (
+                  <button
+                    onClick={startTimeAttack}
+                    className="bg-white text-rose-600 font-bold px-5 py-2.5 rounded-xl shadow-md hover:bg-rose-50 transition-all text-sm active:scale-95"
+                  >
+                    スタート！
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* メインカード */}
+          <div className={`bg-white rounded-3xl p-6 md:p-8 shadow-xl border border-slate-100 relative overflow-hidden transition-all ${
+            feedback === 'correct' ? 'ring-4 ring-emerald-400 animate-success' : ''
+          } ${feedback === 'incorrect' ? 'ring-4 ring-rose-400 animate-shake' : ''}`}>
+            
+            {/* 上部タグ・ストリーク */}
+            <div className="flex items-center justify-between mb-6">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                {currentProblem?.levelLabel}
+              </span>
+
+              <div className="flex items-center gap-3 text-xs font-bold">
+                <div className="flex items-center gap-1 text-amber-600 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
+                  <i data-lucide="flame" className="w-4 h-4 text-amber-500"></i>
+                  <span>連続正解: <strong className="text-sm">{streak}</strong></span>
+                </div>
+              </div>
+            </div>
+
+            {/* 問題表示エリア */}
+            <div className="my-8 text-center bg-slate-50/80 rounded-2xl p-6 md:p-8 border border-slate-100 shadow-inner">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">計算する問題</div>
+              {renderFormattedExpr()}
+            </div>
+
+            {/* 途中式 & 解答フォーム */}
+            <form onSubmit={checkAnswer} className="space-y-6">
+              
+              {/* ステップ1: 共通因数で括る形 */}
+              <div className="bg-indigo-50/50 p-4 md:p-6 rounded-2xl border border-indigo-100">
+                <div className="text-xs font-bold text-indigo-900 mb-3 flex items-center gap-1.5">
+                  <i data-lucide="arrow-right-circle" className="w-4 h-4 text-indigo-600"></i>
+                  <span>Step 1: 共通の数でカッコにまとめよう！</span>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center gap-2 font-math text-xl md:text-2xl font-bold">
+                  {/* 共通の数 K */}
+                  <input
+                    ref={inputKRef}
+                    type="text"
+                    value={inputK}
+                    onFocus={() => setActiveField('k')}
+                    onChange={(e) => setInputK(e.target.value)}
+                    placeholder="共通の数"
+                    className="w-24 md:w-32 py-2.5 px-3 text-center bg-white border-2 border-indigo-200 rounded-xl focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm font-math text-indigo-900"
+                    autoComplete="off"
+                  />
+
+                  <span className="text-indigo-400 font-extrabold">×</span>
+
+                  <span className="text-slate-600 text-2xl font-normal">(</span>
+
+                  {/* カッコ内 */}
+                  <input
+                    ref={inputBracketRef}
+                    type="text"
+                    value={inputBracket}
+                    onFocus={() => setActiveField('bracket')}
+                    onChange={(e) => setInputBracket(e.target.value)}
+                    placeholder="カッコ内の和・差"
+                    className="w-36 md:w-48 py-2.5 px-3 text-center bg-white border-2 border-indigo-200 rounded-xl focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm font-math text-indigo-900"
+                    autoComplete="off"
+                  />
+
+                  <span className="text-slate-600 text-2xl font-normal">)</span>
+                </div>
+              </div>
+
+              {/* ステップ2: 最終答え */}
+              <div className="bg-emerald-50/50 p-4 md:p-6 rounded-2xl border border-emerald-100">
+                <div className="text-xs font-bold text-emerald-900 mb-3 flex items-center gap-1.5">
+                  <i data-lucide="check-circle-2" className="w-4 h-4 text-emerald-600"></i>
+                  <span>Step 2: 最終的な計算結果を入力！</span>
+                </div>
+
+                <div className="flex items-center justify-center gap-3 font-math text-2xl font-bold">
+                  <span className="text-slate-500 font-extrabold font-sans">=</span>
+                  <input
+                    ref={inputAnsRef}
+                    type="text"
+                    value={inputAns}
+                    onFocus={() => setActiveField('ans')}
+                    onChange={(e) => setInputAns(e.target.value)}
+                    placeholder="最終答え"
+                    className="w-44 md:w-56 py-3 px-4 text-center text-2xl bg-white border-2 border-emerald-300 rounded-xl focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 outline-none transition-all shadow-sm font-math text-emerald-900"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+
+              {/* アクションボタン群 */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={mode === 'timeattack' && !isGameActive}
+                  className="flex-1 py-3.5 px-6 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white font-extrabold rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base active:scale-98"
+                >
+                  <i data-lucide="send" className="w-5 h-5"></i>
+                  <span>答えあわせ</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => loadProblem(level)}
+                  className="py-3.5 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl transition-all flex items-center justify-center gap-2 text-sm"
+                >
+                  <i data-lucide="rotate-cw" className="w-4 h-4"></i>
+                  <span>スキップ / 次の問題</span>
+                </button>
+              </div>
+
+            </form>
+
+            {/* ヒント & 解説トグルボタン */}
+            <div className="mt-6 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  soundManager.playClick();
+                  setShowHint(!showHint);
+                }}
+                className="text-amber-600 hover:text-amber-700 font-bold flex items-center gap-1 bg-amber-50 px-3 py-2 rounded-xl transition-colors"
+              >
+                <i data-lucide="lightbulb" className="w-4 h-4"></i>
+                <span>{showHint ? 'ヒントを隠す' : 'ヒントを見る'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundManager.playClick();
+                  setShowExplanation(!showExplanation);
+                }}
+                className="text-indigo-600 hover:text-indigo-700 font-bold flex items-center gap-1 bg-indigo-50 px-3 py-2 rounded-xl transition-colors"
+              >
+                <i data-lucide="book-open" className="w-4 h-4"></i>
+                <span>{showExplanation ? '詳しい解説をたたむ' : 'ステップ解説を見る'}</span>
+              </button>
+            </div>
+
+            {/* ヒント表示エリア */}
+            {showHint && (
+              <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-sm animate-fadeIn">
+                <div className="font-bold flex items-center gap-2 mb-1">
+                  <i data-lucide="sparkles" className="w-4 h-4 text-amber-600"></i>
+                  ヒント
+                </div>
+                <p className="leading-relaxed">{currentProblem?.hint}</p>
+              </div>
+            )}
+
+            {/* ステップ解説表示エリア */}
+            {showExplanation && currentProblem?.explanation && (
+              <div className="mt-4 p-5 bg-slate-900 text-slate-100 rounded-2xl space-y-3 animate-fadeIn">
+                <div className="font-bold text-indigo-400 text-sm flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <i data-lucide="check-square" className="w-4 h-4"></i>
+                  解き方のステップ解説
+                </div>
+
+                <ol className="space-y-2 text-xs md:text-sm">
+                  {currentProblem.explanation.map((step, idx) => (
+                    <li key={idx} className="flex items-start gap-2">
+                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center mt-0.5">
+                        {idx + 1}
+                      </span>
+                      <span className="leading-relaxed text-slate-200">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+          </div>
+
+          {/* モバイル用スクリーンテンキー (トグル可能) */}
+          {showNumpad && (
+            <div className="mt-4 p-4 bg-white rounded-2xl border border-slate-200 shadow-lg md:hidden">
+              <div className="text-xs font-bold text-slate-400 mb-2 flex items-center justify-between">
+                <span>画面テンキー (入力対象: {activeField === 'k' ? '共通の数' : activeField === 'bracket' ? 'カッコ内' : '最終答え'})</span>
+                <button onClick={() => setShowNumpad(false)} className="text-slate-400"><i data-lucide="x" className="w-4 h-4"></i></button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                {['1','2','3','+'].map(btn => (
+                  <button key={btn} onClick={() => handleNumpadInput(btn)} className="p-3 bg-slate-100 font-math font-bold rounded-xl text-lg active:bg-slate-200">{btn}</button>
+                ))}
+                {['4','5','6','-'].map(btn => (
+                  <button key={btn} onClick={() => handleNumpadInput(btn)} className="p-3 bg-slate-100 font-math font-bold rounded-xl text-lg active:bg-slate-200">{btn}</button>
+                ))}
+                {['7','8','9','.'].map(btn => (
+                  <button key={btn} onClick={() => handleNumpadInput(btn)} className="p-3 bg-slate-100 font-math font-bold rounded-xl text-lg active:bg-slate-200">{btn}</button>
+                ))}
+                <button onClick={() => handleNumpadInput('clear')} className="p-3 bg-rose-100 text-rose-700 font-bold rounded-xl text-sm">C</button>
+                <button onClick={() => handleNumpadInput('0')} className="p-3 bg-slate-100 font-math font-bold rounded-xl text-lg">0</button>
+                <button onClick={() => handleNumpadInput('backspace')} className="p-3 bg-slate-100 text-slate-700 font-bold rounded-xl text-sm">⌫</button>
+                <button onClick={() => handleNumpadInput('next')} className="p-3 bg-indigo-600 text-white font-bold rounded-xl text-sm">次へ</button>
+              </div>
+            </div>
+          )}
+
+          {/* タイムアタック終了モーダル */}
+          {isGameOver && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+              <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full text-center shadow-2xl space-y-5">
+                <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto text-2xl font-black">
+                  ⏱️
+                </div>
+
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800">タイムアップ！</h3>
+                  <p className="text-xs text-slate-500 mt-1">60秒間おつかれさまでした！</p>
+                </div>
+
+                <div className="bg-slate-50 rounded-2xl p-4 space-y-2 border border-slate-100">
+                  <div className="text-xs text-slate-400 font-bold uppercase">獲得スコア</div>
+                  <div className="text-4xl font-black text-rose-500 font-math">{score} <span className="text-sm font-normal text-slate-600">pt</span></div>
+                  {score >= taHighScore && score > 0 && (
+                    <div className="inline-block px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-extrabold mt-1">
+                      🎉 自己新記録達成！
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={startTimeAttack}
+                    className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-xl shadow-md transition-all text-sm"
+                  >
+                    もう一度挑戦
+                  </button>
+                  <button
+                    onClick={() => setIsGameOver(false)}
+                    className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all text-sm"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* フッター */}
+          <footer className="mt-12 text-center text-xs text-slate-400 font-medium space-y-1">
+            <p>共通因数のまとめ計算（分配法則 $a \times b + a \times c = a \times (b + c)$）の練習アプリ</p>
+            <p>© Math Learning Web App</p>
+          </footer>
+
+        </div>
+      );
+    }
+
+    // App マウント
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
